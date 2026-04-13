@@ -16,11 +16,14 @@ if str(SRC_DIR) not in sys.path:
 	sys.path.insert(0, str(SRC_DIR))
 
 from pzplotter.analysis import (  # noqa: E402
+	ControlSystemMetrics,
 	LTIModel,
 	build_lti_model,
 	coefficients_from_roots,
+	control_system_metrics,
 	parse_coefficients,
 	parse_transfer_function_equation_with_mode,
+	second_order_model,
 	stability_summary,
 )
 
@@ -126,6 +129,10 @@ class PoleZeroDesktopApp:
 		self.model_mode_text = tk.StringVar(value="Real coefficients")
 		self.snap_info_text = tk.StringVar(value="Grid snap active.")
 		self.equation_display_text = tk.StringVar(value="H(s) = ...")
+		self.control_damping_text = tk.StringVar(value="0.7")
+		self.control_wn_text = tk.StringVar(value="1.0")
+		self.control_gain_text = tk.StringVar(value="1.0")
+		self.control_info_text = tk.StringVar(value="Control-system metrics will appear here after a model is loaded.")
 
 		self.model: LTIModel = build_lti_model(np.array([1.0, 1.0]), np.array([1.0, 1.4, 1.0]))
 		self.poles = self.model.poles.astype(complex).copy()
@@ -368,8 +375,36 @@ class PoleZeroDesktopApp:
 		reset_button = ttk.Button(opts_box, text="Reset defaults", command=self._reset_defaults)
 		reset_button.grid(sticky="ew", pady=(8, 0))
 
+		self.control_design_section = CollapsibleSection(controls, "Control design", expanded=True)
+		self.control_design_section.container.grid(row=6, column=0, sticky="ew", pady=(0, 10))
+		control_design_box = ttk.LabelFrame(self.control_design_section.content, text="", padding=10)
+		control_design_box.grid(row=0, column=0, sticky="ew")
+		ttk.Label(control_design_box, text="Damping ratio").grid(row=0, column=0, sticky="w")
+		control_zeta_entry = ttk.Entry(control_design_box, textvariable=self.control_damping_text, width=12)
+		control_zeta_entry.grid(row=0, column=1, sticky="w", padx=(8, 0))
+		ttk.Label(control_design_box, text="Natural frequency").grid(row=1, column=0, sticky="w", pady=(6, 0))
+		control_wn_entry = ttk.Entry(control_design_box, textvariable=self.control_wn_text, width=12)
+		control_wn_entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+		ttk.Label(control_design_box, text="Gain").grid(row=2, column=0, sticky="w", pady=(6, 0))
+		control_gain_entry = ttk.Entry(control_design_box, textvariable=self.control_gain_text, width=12)
+		control_gain_entry.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+		build_control_button = ttk.Button(control_design_box, text="Build second-order system", command=self._build_control_system_from_specs)
+		build_control_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+		ToolTip(control_zeta_entry, "Damping ratio for a canonical second-order system.")
+		ToolTip(control_wn_entry, "Natural frequency in rad/s for a canonical second-order system.")
+		ToolTip(control_gain_entry, "Overall gain applied to the prototype system.")
+		ToolTip(build_control_button, "Generate a control-system prototype from the entered specifications.")
+
+		self.control_info_section = CollapsibleSection(controls, "System information", expanded=True)
+		self.control_info_section.container.grid(row=7, column=0, sticky="ew", pady=(0, 10))
+		control_info_box = ttk.LabelFrame(self.control_info_section.content, text="", padding=10)
+		control_info_box.grid(row=0, column=0, sticky="ew")
+		self.control_info_widget = tk.Text(control_info_box, height=18, width=38, wrap="word")
+		self.control_info_widget.grid(row=0, column=0, sticky="ew")
+		self.control_info_widget.configure(state="disabled")
+
 		status_section = CollapsibleSection(controls, "Status", expanded=True)
-		status_section.container.grid(row=6, column=0, sticky="ew")
+		status_section.container.grid(row=8, column=0, sticky="ew")
 		status_box = ttk.LabelFrame(status_section.content, text="", padding=10)
 		status_box.grid(row=0, column=0, sticky="ew")
 		ttk.Label(status_box, textvariable=self.status_text, wraplength=330, justify="left").grid(sticky="w")
@@ -407,6 +442,7 @@ class PoleZeroDesktopApp:
 
 		self._populate_pz_table()
 		self._set_input_mode_visibility()
+		self._sync_control_mode_sections()
 		self._update_sidebar_width()
 
 		self.root.bind("<Return>", lambda _event: self._apply_exact_values())
@@ -435,6 +471,7 @@ class PoleZeroDesktopApp:
 		self.sim_time.set(10.0)
 		self.selected_kind = None
 		self.selected_index = None
+		self._sync_control_mode_sections()
 		self._set_input_mode_visibility()
 		self._load_system()
 
@@ -450,7 +487,18 @@ class PoleZeroDesktopApp:
 		self._refresh_from_state()
 
 	def _on_analysis_mode_changed(self) -> None:
+		self._sync_control_mode_sections()
 		self._refresh_from_state()
+
+	def _sync_control_mode_sections(self) -> None:
+		if self._analysis_mode() == "Control systems":
+			if not self.control_design_section.container.winfo_ismapped():
+				self.control_design_section.container.grid()
+			if not self.control_info_section.container.winfo_ismapped():
+				self.control_info_section.container.grid()
+		else:
+			self.control_design_section.container.grid_remove()
+			self.control_info_section.container.grid_remove()
 
 	def _on_input_mode_changed(self) -> None:
 		self._set_input_mode_visibility()
@@ -963,14 +1011,109 @@ class PoleZeroDesktopApp:
 	def _refresh_from_state(self) -> None:
 		self._update_selection_entries()
 		self._update_equation_output()
+		self._update_control_information()
 		self._update_sidebar_width()
 		self._draw_plots()
+
+	def _format_metric_value(self, value: float | None, precision: int = 4) -> str:
+		if value is None:
+			return "n/a"
+		return f"{value:.{precision}f}"
+
+	def _format_time_value(self, value: float | None) -> str:
+		if value is None:
+			return "n/a"
+		return f"{value:.4f} s"
+
+	def _format_complex_value(self, value: complex | None) -> str:
+		if value is None:
+			return "n/a"
+		return f"{value.real:.4f} {'+' if value.imag >= 0 else '-'} {abs(value.imag):.4f}j"
+
+	def _format_pole_metrics(self, metrics: ControlSystemMetrics) -> str:
+		if not metrics.pole_metrics:
+			return "No dynamic poles detected."
+		lines = ["Pole modal data:"]
+		for index, pole_metric in enumerate(metrics.pole_metrics, start=1):
+			lines.append(
+				f"  {index}. p = {self._format_complex_value(pole_metric.pole)} | "
+				f"ζ = {self._format_metric_value(pole_metric.damping_ratio)} | "
+				f"ωn = {self._format_metric_value(pole_metric.natural_frequency)} | "
+				f"ωd = {self._format_metric_value(pole_metric.damped_frequency)} | "
+				f"τ = {self._format_time_value(pole_metric.time_constant)}"
+			)
+		return "\n".join(lines)
+
+	def _update_control_information(self) -> None:
+		if self._analysis_mode() != "Control systems":
+			self.control_info_widget.configure(state="normal")
+			self.control_info_widget.delete("1.0", tk.END)
+			self.control_info_widget.insert(tk.END, "Control-system metrics are hidden in Signal processing mode.")
+			self.control_info_widget.configure(state="disabled")
+			return
+		try:
+			metrics = control_system_metrics(self.model, t_final=float(self.sim_time.get()))
+		except Exception as exc:
+			self.control_info_widget.configure(state="normal")
+			self.control_info_widget.delete("1.0", tk.END)
+			self.control_info_widget.insert(tk.END, f"Unable to compute control metrics: {exc}")
+			self.control_info_widget.configure(state="disabled")
+			return
+
+		lines = [
+			"System information",
+			f"Initial value: {self._format_metric_value(metrics.initial_value)}",
+			f"Final value: {self._format_metric_value(metrics.final_value)}",
+			f"Peak value: {self._format_metric_value(metrics.peak_value)} at {self._format_time_value(metrics.peak_time)}",
+			f"Minimum value: {self._format_metric_value(metrics.minimum_value)} at {self._format_time_value(metrics.minimum_time)}",
+			f"Overshoot: {self._format_metric_value(metrics.overshoot_percent)}%",
+			f"Undershoot: {self._format_metric_value(metrics.undershoot_percent)}%",
+			f"Rise time (10-90%): {self._format_time_value(metrics.rise_time)}",
+			f"Settling time (2%): {self._format_time_value(metrics.settling_time_2pct)}",
+			f"Settling time (5%): {self._format_time_value(metrics.settling_time_5pct)}",
+			f"Steady-state error: {self._format_metric_value(metrics.steady_state_error)}",
+			f"Dominant pole: {self._format_complex_value(metrics.dominant_pole)}",
+			f"Damping ratio: {self._format_metric_value(metrics.damping_ratio)}",
+			f"Natural frequency: {self._format_metric_value(metrics.natural_frequency)} rad/s",
+			f"Damped frequency: {self._format_metric_value(metrics.damped_frequency)} rad/s",
+			f"Time constant: {self._format_time_value(metrics.time_constant)}",
+			"",
+			self._format_pole_metrics(metrics),
+		]
+		self.control_info_widget.configure(state="normal")
+		self.control_info_widget.delete("1.0", tk.END)
+		self.control_info_widget.insert(tk.END, "\n".join(lines))
+		self.control_info_widget.configure(state="disabled")
+
+	def _build_control_system_from_specs(self) -> None:
+		try:
+			zeta = float(self.control_damping_text.get())
+			wn = float(self.control_wn_text.get())
+			gain = float(self.control_gain_text.get())
+		except ValueError as exc:
+			messagebox.showerror("Invalid control specs", f"Control specification fields must be numeric: {exc}")
+			return
+
+		try:
+			model = second_order_model(zeta, wn, gain=gain)
+		except Exception as exc:
+			messagebox.showerror("Invalid control specs", str(exc))
+			return
+
+		self.analysis_mode_text.set("Control systems")
+		self.input_mode.set("Coefficients")
+		self.num_text.set(" ".join(f"{value:.6g}" for value in np.atleast_1d(model.numerator)))
+		self.den_text.set(" ".join(f"{value:.6g}" for value in np.atleast_1d(model.denominator)))
+		self._sync_control_mode_sections()
+		self._set_input_mode_visibility()
+		self._load_system()
 
 	def _draw_plots(self) -> None:
 		self.figure.clear()
 		if self._analysis_mode() == "Control systems":
-			self.ax_pz = self.figure.add_subplot(1, 2, 1)
-			self.ax_time = self.figure.add_subplot(1, 2, 2)
+			plot_grid = self.figure.add_gridspec(1, 2, width_ratios=[1.05, 1.25])
+			self.ax_pz = self.figure.add_subplot(plot_grid[0, 0])
+			self.ax_time = self.figure.add_subplot(plot_grid[0, 1])
 			self.ax_mag = None
 			self.ax_phase = None
 		else:

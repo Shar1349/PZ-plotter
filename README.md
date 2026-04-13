@@ -24,6 +24,8 @@ A native desktop tool for control systems and filter design analysis, featuring 
   - Stability classification from pole locations
   - Transfer function coefficients display
   - Adjustable simulation time horizon (1–40 seconds)
+  - Control-system performance metrics including rise time, settling time, overshoot, damping ratio, and natural frequency
+  - Canonical second-order prototype generation from damping ratio and natural frequency
 
 ## Installation
 
@@ -103,7 +105,8 @@ This version opens a native desktop window and lets you click and drag poles/zer
 2. Choose an input mode: coefficients, equation, or pole-zero table.
 3. Drag poles/zeros on the pole-zero map or edit selected points numerically.
 4. Switch between Control systems and Signal processing analysis modes.
-5. Use visibility toggles and simulation horizon controls to focus analysis.
+5. Use the Control design section to generate a second-order prototype from damping ratio and natural frequency.
+6. Use visibility toggles and simulation horizon controls to focus analysis.
 
 ## Project Structure
 

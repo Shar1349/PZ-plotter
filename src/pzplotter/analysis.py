@@ -31,6 +31,41 @@ class FrequencyResponse:
 
 
 @dataclass
+class PoleMetric:
+    """Per-pole modal information for control-system analysis."""
+
+    pole: complex
+    damping_ratio: float | None
+    natural_frequency: float | None
+    damped_frequency: float | None
+    time_constant: float | None
+
+
+@dataclass
+class ControlSystemMetrics:
+    """Step-response and pole-based performance metrics."""
+
+    initial_value: float
+    final_value: float
+    peak_value: float
+    peak_time: float
+    minimum_value: float
+    minimum_time: float
+    overshoot_percent: float | None
+    undershoot_percent: float | None
+    rise_time: float | None
+    settling_time_2pct: float | None
+    settling_time_5pct: float | None
+    steady_state_error: float | None
+    dominant_pole: complex | None
+    damping_ratio: float | None
+    natural_frequency: float | None
+    damped_frequency: float | None
+    time_constant: float | None
+    pole_metrics: list[PoleMetric]
+
+
+@dataclass
 class TimeResponse:
     """Time-domain response output for plotting."""
 
@@ -236,6 +271,154 @@ def time_response(
         t, y, _ = signal.lsim(system, U=u, T=t)
 
     return TimeResponse(t=t, y=y, signal_type=signal_type)
+
+
+def second_order_model(damping_ratio: float, natural_frequency: float, gain: float = 1.0) -> LTIModel:
+    """Build a canonical second-order control-system model from common specs."""
+
+    if natural_frequency <= 0:
+        raise ValueError("Natural frequency must be positive.")
+    if damping_ratio < 0:
+        raise ValueError("Damping ratio must be non-negative.")
+
+    numerator = np.array([gain * natural_frequency**2], dtype=float)
+    denominator = np.array([1.0, 2.0 * damping_ratio * natural_frequency, natural_frequency**2], dtype=float)
+    return build_lti_model(numerator, denominator)
+
+
+def _settling_time(t: np.ndarray, y: np.ndarray, target: float, tolerance: float) -> float | None:
+    if not len(t):
+        return None
+    band = max(abs(target) * tolerance, tolerance)
+    outside = np.where(np.abs(y - target) > band)[0]
+    if outside.size == 0:
+        return float(t[0])
+    last_outside = int(outside[-1])
+    if last_outside >= len(t) - 1:
+        return None
+    return float(t[last_outside + 1])
+
+
+def _rise_time(t: np.ndarray, y: np.ndarray, start_value: float, final_value: float) -> float | None:
+    delta = final_value - start_value
+    if abs(delta) < 1e-12:
+        return None
+
+    lower = start_value + 0.1 * delta
+    upper = start_value + 0.9 * delta
+
+    if delta > 0:
+        lower_hits = np.where(y >= lower)[0]
+        upper_hits = np.where(y >= upper)[0]
+    else:
+        lower_hits = np.where(y <= lower)[0]
+        upper_hits = np.where(y <= upper)[0]
+
+    if lower_hits.size == 0 or upper_hits.size == 0:
+        return None
+    return float(t[upper_hits[0]] - t[lower_hits[0]])
+
+
+def _modal_metric_for_pole(pole: complex) -> PoleMetric:
+    if abs(pole) < 1e-12:
+        return PoleMetric(pole=pole, damping_ratio=None, natural_frequency=0.0, damped_frequency=0.0, time_constant=None)
+
+    natural_frequency = float(abs(pole))
+    damped_frequency = float(abs(np.imag(pole)))
+    if np.isclose(np.imag(pole), 0.0):
+        damping_ratio = 1.0
+    else:
+        damping_ratio = float(-np.real(pole) / natural_frequency)
+
+    time_constant = None
+    if np.real(pole) < 0:
+        time_constant = float(1.0 / abs(np.real(pole)))
+
+    return PoleMetric(
+        pole=pole,
+        damping_ratio=damping_ratio,
+        natural_frequency=natural_frequency,
+        damped_frequency=damped_frequency,
+        time_constant=time_constant,
+    )
+
+
+def control_system_metrics(model: LTIModel, t_final: float = 10.0, n_points: int = 2400) -> ControlSystemMetrics:
+    """Compute common control-system performance specifications from the model."""
+
+    if t_final <= 0:
+        raise ValueError("Final time must be positive.")
+
+    if model.denominator.size == 0:
+        raise ValueError("Model denominator is empty.")
+
+    response = time_response(model, signal_type="step", t_final=t_final, n_points=n_points)
+    t = np.asarray(response.t, dtype=float)
+    y = np.real_if_close(np.asarray(response.y))
+    y = np.real(y)
+
+    initial_value = float(y[0])
+    peak_index = int(np.argmax(y)) if y.size else 0
+    minimum_index = int(np.argmin(y)) if y.size else 0
+    peak_value = float(y[peak_index])
+    minimum_value = float(y[minimum_index])
+    peak_time = float(t[peak_index]) if y.size else 0.0
+    minimum_time = float(t[minimum_index]) if y.size else 0.0
+
+    stable = bool(model.poles.size == 0 or np.all(np.real(model.poles) < 0))
+    final_value_theoretical: float | None = None
+    if stable and abs(model.denominator[-1]) > 1e-12:
+        final_value_theoretical = float(np.real_if_close(np.polyval(model.numerator, 0.0) / np.polyval(model.denominator, 0.0)))
+
+    final_value = final_value_theoretical if final_value_theoretical is not None else float(y[-1])
+
+    overshoot_percent = None
+    undershoot_percent = None
+    if abs(final_value) > 1e-12:
+        overshoot_percent = max(0.0, (peak_value - final_value) / abs(final_value) * 100.0)
+        undershoot_percent = max(0.0, (final_value - minimum_value) / abs(final_value) * 100.0)
+
+    rise_time = _rise_time(t, y, initial_value, final_value)
+    settling_time_2pct = _settling_time(t, y, final_value, 0.02)
+    settling_time_5pct = _settling_time(t, y, final_value, 0.05)
+    steady_state_error = abs(final_value - final_value_theoretical) if final_value_theoretical is not None else None
+
+    pole_metrics = [_modal_metric_for_pole(pole) for pole in model.poles]
+    dominant_pole = None
+    damping_ratio = None
+    natural_frequency = None
+    damped_frequency = None
+    time_constant = None
+
+    stable_poles = [pole for pole in model.poles if np.real(pole) < 0]
+    if stable_poles:
+        dominant_pole = max(stable_poles, key=lambda pole: np.real(pole))
+        dominant_metric = _modal_metric_for_pole(dominant_pole)
+        damping_ratio = dominant_metric.damping_ratio
+        natural_frequency = dominant_metric.natural_frequency
+        damped_frequency = dominant_metric.damped_frequency
+        time_constant = dominant_metric.time_constant
+
+    return ControlSystemMetrics(
+        initial_value=initial_value,
+        final_value=final_value,
+        peak_value=peak_value,
+        peak_time=peak_time,
+        minimum_value=minimum_value,
+        minimum_time=minimum_time,
+        overshoot_percent=overshoot_percent,
+        undershoot_percent=undershoot_percent,
+        rise_time=rise_time,
+        settling_time_2pct=settling_time_2pct,
+        settling_time_5pct=settling_time_5pct,
+        steady_state_error=steady_state_error,
+        dominant_pole=dominant_pole,
+        damping_ratio=damping_ratio,
+        natural_frequency=natural_frequency,
+        damped_frequency=damped_frequency,
+        time_constant=time_constant,
+        pole_metrics=pole_metrics,
+    )
 
 
 def stability_summary(model: LTIModel) -> str:
