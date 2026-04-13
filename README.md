@@ -1,23 +1,23 @@
 # Interactive Pole-Zero Plotter
 
-An interactive web-based tool for control systems and filter design analysis, featuring real-time pole-zero manipulation, system response visualization, and transfer function equation parsing.
+A native desktop tool for control systems and filter design analysis, featuring real-time pole-zero dragging, system response visualization, and transfer function equation parsing.
 
 ## Features
 
 - **Dual Perspective Analysis**
   - Control systems view: Step, impulse, and ramp response
   - Filter design view: Bode magnitude and phase plots
-  
-- **Interactive Pole-Zero Editing**
-  - Edit poles and zeros directly in tables (real and imaginary parts)
-  - Live recomputation of transfer function from edited roots
-  - Immediate plot updates as you modify poles/zeros
-  
+
+- **Interactive Pole-Zero Dragging**
+  - Click and drag poles and zeros directly on the plot
+  - Exact numeric coordinate editing for the selected point
+  - Real-mode snapping and complex-mode freedom
+
 - **Multiple Input Methods**
   - Numerator/denominator coefficients
   - Transfer function equations (e.g., `H(s) = (s + 1) / (s^2 + 1.4*s + 1)`)
   - Support for Laplace (s) or Z-transform (z) variables
-  
+
 - **System Analysis**
   - Stability classification from pole locations
   - Transfer function coefficients display
@@ -50,13 +50,13 @@ An interactive web-based tool for control systems and filter design analysis, fe
 
 ## Usage
 
-Start the app from the project root with:
+Run the Matplotlib desktop app from the project root with:
 
 ```bash
-python -m streamlit run app.py
+python desktop_app.py
 ```
 
-Streamlit will open a browser window (usually at `http://localhost:8501`). If it doesn't open automatically, copy the URL from the terminal.
+This version opens a native desktop window and lets you click and drag poles/zeros directly on the plot.
 
 ### Quick Start
 1. Use the default second-order system or load your own via coefficients or equation
@@ -68,7 +68,7 @@ Streamlit will open a browser window (usually at `http://localhost:8501`). If it
 
 ```
 PZ-plotter/
-├── app.py                      # Main Streamlit app
+├── desktop_app.py              # Native Matplotlib/Tkinter desktop app
 ├── requirements.txt            # Python dependencies
 ├── README.md                   # This file
 ├── .gitignore                  # Git ignore rules
@@ -80,11 +80,9 @@ PZ-plotter/
 
 ## Dependencies
 
-- **streamlit** – Web app framework
 - **numpy** – Numerical computing
 - **scipy** – Scientific computing (control systems, signal processing)
-- **matplotlib** – (installed as scipy dependency)
-- **plotly** – Interactive plotting
+- **matplotlib** – Plotting and GUI interaction
 - **sympy** – Symbolic math for equation parsing
 
 See `requirements.txt` for pinned versions.
@@ -93,18 +91,17 @@ See `requirements.txt` for pinned versions.
 
 ### Adding New Features
 - Time-domain response plotting functions are in [src/pzplotter/analysis.py](src/pzplotter/analysis.py)
-- UI layout and interactivity are in [app.py](app.py)
+- Native drag-capable desktop UI is in [desktop_app.py](desktop_app.py)
 - Add new response types by extending the `TimeSignalType` literal and `_input_signal()` function
 
 ### Testing Locally
-Run with verbose logging:
+Run the desktop app directly:
 ```bash
-python -m streamlit run app.py --logger.level=debug
+python desktop_app.py
 ```
 
 ## Future Enhancements
 
-- Drag-and-drop pole/zero manipulation directly on the plot canvas
 - Discrete-time stability checks (z-plane, unit circle)
 - Automatic transient metrics (rise time, settling time, overshoot)
 - System step-response specifications editor
@@ -129,13 +126,9 @@ Contributions are welcome! Please:
 
 ## Troubleshooting
 
-**Q: `ModuleNotFoundError: No module named 'streamlit'`**
-- Ensure you've activated the virtual environment: `source .venv/bin/activate`
-- Reinstall dependencies: `pip install -r requirements.txt`
-
-**Q: App won't open in browser**
-- Check the terminal output for the URL (usually `http://localhost:8501`)
-- If port 8501 is busy, specify a different one: `streamlit run app.py --server.port 8502`
+**Q: Want real point dragging**
+- Use the desktop app: `python desktop_app.py`
+- Click a pole or zero and drag it directly in the plot window
 
 **Q: Plots not updating after editing poles/zeros**
 - Ensure you've completed your edits in the table and the app has recomputed

@@ -86,8 +86,46 @@ def parse_transfer_function_equation(raw: str, variable: str = "s") -> tuple[np.
     if den_poly.is_zero:
         raise ValueError("Equation denominator cannot be zero.")
 
-    num = _poly_to_real_coeffs(num_poly)
-    den = _poly_to_real_coeffs(den_poly)
+    num = _poly_to_coeffs(num_poly, allow_complex=False)
+    den = _poly_to_coeffs(den_poly, allow_complex=False)
+    return trim_leading_zeros(num), trim_leading_zeros(den)
+
+
+def parse_transfer_function_equation_with_mode(
+    raw: str,
+    variable: str = "s",
+    allow_complex: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Parse a transfer-function equation string with optional complex coefficients."""
+
+    if not raw.strip():
+        raise ValueError("Equation field is empty.")
+
+    expression_text = raw.strip()
+    if "=" in expression_text:
+        expression_text = expression_text.split("=", maxsplit=1)[1].strip()
+
+    expression_text = expression_text.replace("^", "**")
+    symbol = sp.Symbol(variable)
+
+    try:
+        expression = sp.sympify(expression_text, locals={variable: symbol})
+    except (sp.SympifyError, TypeError) as exc:
+        raise ValueError("Could not parse equation. Use a valid symbolic expression.") from exc
+
+    num_expr, den_expr = sp.fraction(sp.cancel(expression))
+
+    try:
+        num_poly = sp.Poly(sp.expand(num_expr), symbol)
+        den_poly = sp.Poly(sp.expand(den_expr), symbol)
+    except sp.PolynomialError as exc:
+        raise ValueError("Equation must reduce to a polynomial ratio in the selected variable.") from exc
+
+    if den_poly.is_zero:
+        raise ValueError("Equation denominator cannot be zero.")
+
+    num = _poly_to_coeffs(num_poly, allow_complex=allow_complex)
+    den = _poly_to_coeffs(den_poly, allow_complex=allow_complex)
     return trim_leading_zeros(num), trim_leading_zeros(den)
 
 
@@ -101,44 +139,55 @@ def trim_leading_zeros(values: np.ndarray) -> np.ndarray:
     return values[non_zero_indices[0] :]
 
 
-def _poly_to_real_coeffs(poly: sp.Poly) -> np.ndarray:
-    """Convert SymPy polynomial coefficients to a real-valued numpy array."""
+def _poly_to_coeffs(poly: sp.Poly, allow_complex: bool = False) -> np.ndarray:
+    """Convert SymPy polynomial coefficients to a numpy array."""
 
     coeffs = np.array([complex(coeff.evalf()) for coeff in poly.all_coeffs()], dtype=complex)
     coeffs = np.real_if_close(coeffs, tol=1000)
 
-    if np.iscomplexobj(coeffs):
+    if np.iscomplexobj(coeffs) and not allow_complex:
         raise ValueError(
             "Equation produced complex coefficients. Use conjugate root pairs for real systems."
         )
 
+    if allow_complex:
+        return coeffs.astype(complex)
     return coeffs.astype(float)
 
 
-def coefficients_from_roots(roots: np.ndarray, scale: float = 1.0) -> np.ndarray:
+def coefficients_from_roots(
+    roots: np.ndarray,
+    scale: float = 1.0,
+    allow_complex: bool = False,
+) -> np.ndarray:
     """Build polynomial coefficients from roots and a scalar gain."""
 
     if roots.size == 0:
+        if allow_complex:
+            return np.array([complex(scale)], dtype=complex)
         return np.array([float(scale)], dtype=float)
 
     coeffs = np.poly(roots) * scale
     coeffs = np.real_if_close(coeffs, tol=1000)
-    if np.iscomplexobj(coeffs):
+    if np.iscomplexobj(coeffs) and not allow_complex:
         raise ValueError("Roots must produce real coefficients for this real-valued model.")
 
+    if allow_complex:
+        return trim_leading_zeros(coeffs.astype(complex))
     return trim_leading_zeros(coeffs.astype(float))
 
 
-def build_lti_model(num: np.ndarray, den: np.ndarray) -> LTIModel:
+def build_lti_model(num: np.ndarray, den: np.ndarray, allow_complex: bool = False) -> LTIModel:
     """Build an LTI model and compute poles and zeros from transfer function coefficients."""
 
     if den.size == 0 or np.allclose(den, 0.0):
         raise ValueError("Denominator must contain at least one non-zero coefficient.")
 
-    num = trim_leading_zeros(np.array(num, dtype=float))
-    den = trim_leading_zeros(np.array(den, dtype=float))
+    dtype = complex if allow_complex else float
+    num = trim_leading_zeros(np.array(num, dtype=dtype))
+    den = trim_leading_zeros(np.array(den, dtype=dtype))
 
-    if den[0] == 0:
+    if abs(den[0]) < 1e-12:
         raise ValueError("Denominator leading coefficient cannot be zero.")
 
     zeros = np.roots(num) if num.size > 1 else np.array([], dtype=complex)
