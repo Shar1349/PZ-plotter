@@ -12,10 +12,12 @@ A native desktop tool for control systems and filter design analysis, featuring 
   - Click and drag poles and zeros directly on the plot
   - Exact numeric coordinate editing for the selected point
   - Real-mode snapping and complex-mode freedom
+  - Optional conjugate-pair mirroring for real-coefficient systems
 
 - **Multiple Input Methods**
   - Numerator/denominator coefficients
   - Transfer function equations (e.g., `H(s) = (s + 1) / (s^2 + 1.4*s + 1)`)
+  - Pole-zero table input with editable real/imaginary coordinates
   - Support for Laplace (s) or Z-transform (z) variables
 
 - **System Analysis**
@@ -29,7 +31,45 @@ A native desktop tool for control systems and filter design analysis, featuring 
 - Python 3.10 or higher
 - pip (Python package manager)
 
-### Setup on Linux Mint XFCE
+### Setup on Windows (PowerShell)
+
+1. **Clone or navigate to the project**
+  ```powershell
+  cd C:\path\to\PZ-plotter
+  ```
+
+2. **Create and activate a virtual environment**
+  ```powershell
+  py -3 -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  ```
+
+3. **Upgrade pip and install dependencies**
+  ```powershell
+  python -m pip install --upgrade pip
+  python -m pip install -r requirements.txt
+  ```
+
+### Setup on macOS (zsh/bash)
+
+1. **Clone or navigate to the project**
+  ```bash
+  cd /path/to/PZ-plotter
+  ```
+
+2. **Create and activate a virtual environment**
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  ```
+
+3. **Upgrade pip and install dependencies**
+  ```bash
+  python -m pip install --upgrade pip
+  python -m pip install -r requirements.txt
+  ```
+
+### Setup on Linux (bash)
 
 1. **Clone or navigate to the project**
    ```bash
@@ -59,10 +99,11 @@ python desktop_app.py
 This version opens a native desktop window and lets you click and drag poles/zeros directly on the plot.
 
 ### Quick Start
-1. Use the default second-order system or load your own via coefficients or equation
-2. Edit poles and zeros in the left and center tables to see real-time response updates
-3. Adjust the simulation time horizon with the slider
-4. Observe stability classification and transfer function coefficients
+1. Start from the default second-order example or load your own system.
+2. Choose an input mode: coefficients, equation, or pole-zero table.
+3. Drag poles/zeros on the pole-zero map or edit selected points numerically.
+4. Switch between Control systems and Signal processing analysis modes.
+5. Use visibility toggles and simulation horizon controls to focus analysis.
 
 ## Project Structure
 
@@ -100,6 +141,11 @@ Run the desktop app directly:
 python desktop_app.py
 ```
 
+Run a quick syntax check before committing:
+```bash
+python -m py_compile desktop_app.py src/pzplotter/analysis.py
+```
+
 ## Future Enhancements
 
 - Discrete-time stability checks (z-plane, unit circle)
@@ -109,20 +155,19 @@ python desktop_app.py
 
 ## License
 
-[Add your license here, e.g., MIT, GPL-3.0]
+This project is licensed under the GNU General Public License v3.0 (or later).
+
+This copyleft license helps keep redistributed modifications open-source, which aligns well with educational use and sharing.
+
+See [LICENSE](LICENSE).
 
 ## Author
 
-[Your Name or Organization]
+Maintained by repository contributors.
 
 ## Contributing
 
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit changes (`git commit -m 'Add my feature'`)
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a pull request
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow and PR guidance.
 
 ## Troubleshooting
 
@@ -131,8 +176,8 @@ Contributions are welcome! Please:
 - Click a pole or zero and drag it directly in the plot window
 
 **Q: Plots not updating after editing poles/zeros**
-- Ensure you've completed your edits in the table and the app has recomputed
-- Refresh the browser if needed (Ctrl+R or Cmd+R)
+- Click **Update row** (table mode) and then **Load system**.
+- Ensure conjugate pairs are valid in real-coefficient mode.
 
 **Q: Import error with `pzplotter` module**
 - Check that the working directory is the project root

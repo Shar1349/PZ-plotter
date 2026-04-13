@@ -189,6 +189,11 @@ build/
 .env.local
 .env.production.local
 
+# Local run artifacts
+*.png
+*.svg
+*.pdf
+
 # Misc
 .cache/
 .pytest_cache/
@@ -196,3 +201,6 @@ htmlcov/
 .coverage
 coverage.xml
 *.cover
+
+# Desktop app local logs or traces
+*.log
