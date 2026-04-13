@@ -17,10 +17,14 @@ if str(SRC_DIR) not in sys.path:
 
 from pzplotter.analysis import (  # noqa: E402
 	ControlSystemMetrics,
+	FilterDesignMetrics,
+	FilterDesignSpecs,
 	LTIModel,
 	build_lti_model,
 	coefficients_from_roots,
 	control_system_metrics,
+	design_filter_from_specs,
+	filter_design_metrics,
 	parse_coefficients,
 	parse_transfer_function_equation_with_mode,
 	second_order_model,
@@ -106,6 +110,9 @@ class PoleZeroDesktopApp:
 		self.snap_to_grid = tk.BooleanVar(value=True)
 		self.grid_step = tk.DoubleVar(value=0.01)
 		self.sim_time = tk.DoubleVar(value=10.0)
+		self.auto_frequency_scale = tk.BooleanVar(value=True)
+		self.freq_min = tk.DoubleVar(value=0.01)
+		self.freq_max = tk.DoubleVar(value=1000.0)
 		self.analysis_mode_text = tk.StringVar(value="Control systems")
 		self.show_step_response = tk.BooleanVar(value=True)
 		self.show_impulse_response = tk.BooleanVar(value=True)
@@ -133,6 +140,17 @@ class PoleZeroDesktopApp:
 		self.control_wn_text = tk.StringVar(value="1.0")
 		self.control_gain_text = tk.StringVar(value="1.0")
 		self.control_info_text = tk.StringVar(value="Control-system metrics will appear here after a model is loaded.")
+		self.signal_family_text = tk.StringVar(value="Butterworth")
+		self.signal_response_type_text = tk.StringVar(value="lowpass")
+		self.signal_order_text = tk.StringVar(value="")
+		self.signal_passband_text = tk.StringVar(value="1.0")
+		self.signal_stopband_text = tk.StringVar(value="1.5")
+		self.signal_passband_ripple_text = tk.StringVar(value="1.0")
+		self.signal_stopband_attenuation_text = tk.StringVar(value="40.0")
+		self.signal_gain_text = tk.StringVar(value="1.0")
+		self.signal_bessel_norm_text = tk.StringVar(value="phase")
+		self.signal_info_text = tk.StringVar(value="Filter metrics will appear here after a design is generated.")
+		self.signal_specs: FilterDesignSpecs | None = None
 
 		self.model: LTIModel = build_lti_model(np.array([1.0, 1.0]), np.array([1.0, 1.4, 1.0]))
 		self.poles = self.model.poles.astype(complex).copy()
@@ -338,8 +356,12 @@ class PoleZeroDesktopApp:
 		equation_section.container.grid(row=4, column=0, sticky="ew", pady=(0, 10))
 		equation_box = ttk.LabelFrame(equation_section.content, text="", padding=10)
 		equation_box.grid(row=0, column=0, sticky="ew")
+		equation_box.columnconfigure(0, weight=1)
 		self.equation_text_widget = tk.Text(equation_box, height=7, width=38, wrap="word")
 		self.equation_text_widget.grid(row=0, column=0, sticky="ew")
+		equation_scroll = ttk.Scrollbar(equation_box, orient="vertical", command=self.equation_text_widget.yview)
+		equation_scroll.grid(row=0, column=1, sticky="ns")
+		self.equation_text_widget.configure(yscrollcommand=equation_scroll.set)
 		self.equation_text_widget.configure(state="disabled")
 
 		options_section = CollapsibleSection(controls, "Options", expanded=True)
@@ -367,6 +389,16 @@ class PoleZeroDesktopApp:
 		bode_mag_check.grid(sticky="w", pady=(4, 0))
 		bode_phase_check = ttk.Checkbutton(opts_box, text="Show Bode phase", variable=self.show_bode_phase)
 		bode_phase_check.grid(sticky="w", pady=(4, 0))
+		freq_box = ttk.LabelFrame(opts_box, text="Frequency range (rad/s)", padding=8)
+		freq_box.grid(sticky="ew", pady=(8, 0))
+		auto_freq_check = ttk.Checkbutton(freq_box, text="Auto scale", variable=self.auto_frequency_scale, command=self._on_frequency_scale_changed)
+		auto_freq_check.grid(row=0, column=0, columnspan=2, sticky="w")
+		ttk.Label(freq_box, text="Min").grid(row=1, column=0, sticky="w", pady=(6, 0))
+		self.freq_min_spin = ttk.Spinbox(freq_box, from_=1e-6, to=1e6, increment=0.1, textvariable=self.freq_min, width=12, command=self._refresh_from_state)
+		self.freq_min_spin.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+		ttk.Label(freq_box, text="Max").grid(row=2, column=0, sticky="w", pady=(6, 0))
+		self.freq_max_spin = ttk.Spinbox(freq_box, from_=1e-5, to=1e7, increment=0.1, textvariable=self.freq_max, width=12, command=self._refresh_from_state)
+		self.freq_max_spin.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
 		ttk.Label(opts_box, text="Time horizon").grid(sticky="w", pady=(8, 2))
 		time_spin = ttk.Spinbox(opts_box, from_=1.0, to=40.0, increment=0.5, textvariable=self.sim_time, width=10, command=self._refresh_from_state)
 		time_spin.grid(
@@ -399,9 +431,87 @@ class PoleZeroDesktopApp:
 		self.control_info_section.container.grid(row=7, column=0, sticky="ew", pady=(0, 10))
 		control_info_box = ttk.LabelFrame(self.control_info_section.content, text="", padding=10)
 		control_info_box.grid(row=0, column=0, sticky="ew")
+		control_info_box.columnconfigure(0, weight=1)
 		self.control_info_widget = tk.Text(control_info_box, height=18, width=38, wrap="word")
 		self.control_info_widget.grid(row=0, column=0, sticky="ew")
+		control_info_scroll = ttk.Scrollbar(control_info_box, orient="vertical", command=self.control_info_widget.yview)
+		control_info_scroll.grid(row=0, column=1, sticky="ns")
+		self.control_info_widget.configure(yscrollcommand=control_info_scroll.set)
 		self.control_info_widget.configure(state="disabled")
+
+		self.signal_design_section = CollapsibleSection(controls, "Filter design", expanded=True)
+		self.signal_design_section.container.grid(row=6, column=0, sticky="ew", pady=(0, 10))
+		signal_design_box = ttk.LabelFrame(self.signal_design_section.content, text="", padding=10)
+		signal_design_box.grid(row=0, column=0, sticky="ew")
+		ttk.Label(signal_design_box, text="Filter family").grid(row=0, column=0, sticky="w")
+		self.signal_family_combo = ttk.Combobox(
+			signal_design_box,
+			textvariable=self.signal_family_text,
+			values=("Butterworth", "Chebyshev I", "Chebyshev II", "Elliptic", "Bessel"),
+			state="readonly",
+			width=18,
+		)
+		self.signal_family_combo.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+		ttk.Label(signal_design_box, text="Response type").grid(row=1, column=0, sticky="w", pady=(6, 0))
+		self.signal_response_combo = ttk.Combobox(
+			signal_design_box,
+			textvariable=self.signal_response_type_text,
+			values=("lowpass", "highpass", "bandpass", "bandstop"),
+			state="readonly",
+			width=18,
+		)
+		self.signal_response_combo.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+		ttk.Label(signal_design_box, text="Order (blank = auto)").grid(row=2, column=0, sticky="w", pady=(6, 0))
+		self.signal_order_entry = ttk.Entry(signal_design_box, textvariable=self.signal_order_text, width=12)
+		self.signal_order_entry.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+		ttk.Label(signal_design_box, text="Passband edge(s)").grid(row=3, column=0, sticky="w", pady=(6, 0))
+		self.signal_passband_entry = ttk.Entry(signal_design_box, textvariable=self.signal_passband_text, width=18)
+		self.signal_passband_entry.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+		ttk.Label(signal_design_box, text="Stopband edge(s)").grid(row=4, column=0, sticky="w", pady=(6, 0))
+		self.signal_stopband_entry = ttk.Entry(signal_design_box, textvariable=self.signal_stopband_text, width=18)
+		self.signal_stopband_entry.grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+		ttk.Label(signal_design_box, text="Passband ripple (dB)").grid(row=5, column=0, sticky="w", pady=(6, 0))
+		self.signal_passband_ripple_entry = ttk.Entry(signal_design_box, textvariable=self.signal_passband_ripple_text, width=12)
+		self.signal_passband_ripple_entry.grid(row=5, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+		ttk.Label(signal_design_box, text="Stopband attenuation (dB)").grid(row=6, column=0, sticky="w", pady=(6, 0))
+		self.signal_stopband_atten_entry = ttk.Entry(signal_design_box, textvariable=self.signal_stopband_attenuation_text, width=12)
+		self.signal_stopband_atten_entry.grid(row=6, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+		ttk.Label(signal_design_box, text="Gain").grid(row=7, column=0, sticky="w", pady=(6, 0))
+		self.signal_gain_entry = ttk.Entry(signal_design_box, textvariable=self.signal_gain_text, width=12)
+		self.signal_gain_entry.grid(row=7, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+		ttk.Label(signal_design_box, text="Bessel norm").grid(row=8, column=0, sticky="w", pady=(6, 0))
+		self.signal_bessel_combo = ttk.Combobox(
+			signal_design_box,
+			textvariable=self.signal_bessel_norm_text,
+			values=("phase", "delay"),
+			state="readonly",
+			width=18,
+		)
+		self.signal_bessel_combo.grid(row=8, column=1, sticky="ew", padx=(8, 0), pady=(6, 0))
+		signal_build_button = ttk.Button(signal_design_box, text="Build filter", command=self._build_filter_from_specs)
+		signal_build_button.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+		ToolTip(self.signal_family_combo, "Choose the analog filter family to synthesize.")
+		ToolTip(self.signal_response_combo, "Choose the filter response type.")
+		ToolTip(self.signal_order_entry, "Leave blank to auto-select the order, except for Bessel filters.")
+		ToolTip(self.signal_passband_entry, "Enter one edge for low/high-pass or two edges for band filters.")
+		ToolTip(self.signal_stopband_entry, "Enter one edge for low/high-pass or two edges for band filters.")
+		ToolTip(self.signal_passband_ripple_entry, "Allowed passband ripple in decibels.")
+		ToolTip(self.signal_stopband_atten_entry, "Required stopband attenuation in decibels.")
+		ToolTip(self.signal_gain_entry, "Overall gain applied after the analog design.")
+		ToolTip(self.signal_bessel_combo, "Bessel filter normalization mode.")
+		ToolTip(signal_build_button, "Design a filter from the entered signal-processing specifications.")
+
+		self.signal_info_section = CollapsibleSection(controls, "Filter information", expanded=True)
+		self.signal_info_section.container.grid(row=7, column=0, sticky="ew", pady=(0, 10))
+		signal_info_box = ttk.LabelFrame(self.signal_info_section.content, text="", padding=10)
+		signal_info_box.grid(row=0, column=0, sticky="ew")
+		signal_info_box.columnconfigure(0, weight=1)
+		self.signal_info_widget = tk.Text(signal_info_box, height=18, width=38, wrap="word")
+		self.signal_info_widget.grid(row=0, column=0, sticky="ew")
+		signal_info_scroll = ttk.Scrollbar(signal_info_box, orient="vertical", command=self.signal_info_widget.yview)
+		signal_info_scroll.grid(row=0, column=1, sticky="ns")
+		self.signal_info_widget.configure(yscrollcommand=signal_info_scroll.set)
+		self.signal_info_widget.configure(state="disabled")
 
 		status_section = CollapsibleSection(controls, "Status", expanded=True)
 		status_section.container.grid(row=8, column=0, sticky="ew")
@@ -437,13 +547,20 @@ class PoleZeroDesktopApp:
 		ToolTip(snap_check, "Snap movement to the selected grid spacing.")
 		ToolTip(bode_mag_check, "Show or hide the Bode magnitude subplot.")
 		ToolTip(bode_phase_check, "Show or hide the Bode phase subplot.")
+		ToolTip(auto_freq_check, "Automatically derive Bode frequency limits from poles, zeros, and filter specs.")
+		ToolTip(self.freq_min_spin, "Lower frequency bound for manual Bode scaling.")
+		ToolTip(self.freq_max_spin, "Upper frequency bound for manual Bode scaling.")
 		ToolTip(time_spin, "Set the total simulation time used for time-response plots.")
 		ToolTip(reset_button, "Restore the default example system and UI settings.")
 
 		self._populate_pz_table()
 		self._set_input_mode_visibility()
-		self._sync_control_mode_sections()
+		self._sync_analysis_mode_sections()
+		self._on_frequency_scale_changed()
 		self._update_sidebar_width()
+		self._bind_text_mousewheel(self.equation_text_widget)
+		self._bind_text_mousewheel(self.control_info_widget)
+		self._bind_text_mousewheel(self.signal_info_widget)
 
 		self.root.bind("<Return>", lambda _event: self._apply_exact_values())
 
@@ -451,6 +568,63 @@ class PoleZeroDesktopApp:
 		self.canvas.mpl_connect("button_press_event", self._on_press)
 		self.canvas.mpl_connect("motion_notify_event", self._on_motion)
 		self.canvas.mpl_connect("button_release_event", self._on_release)
+
+	def _bind_text_mousewheel(self, widget: tk.Text) -> None:
+		widget.bind("<MouseWheel>", lambda event, w=widget: self._on_text_mousewheel(event, w), add="+")
+		widget.bind("<Button-4>", lambda event, w=widget: self._on_text_mousewheel(event, w), add="+")
+		widget.bind("<Button-5>", lambda event, w=widget: self._on_text_mousewheel(event, w), add="+")
+
+	def _on_text_mousewheel(self, event, widget: tk.Text) -> str:
+		if getattr(event, "num", None) == 4:
+			step = -1
+		elif getattr(event, "num", None) == 5:
+			step = 1
+		else:
+			step = -1 if getattr(event, "delta", 0) > 0 else 1
+		widget.yview_scroll(step, "units")
+		return "break"
+
+	def _format_coeff_token(self, value: complex) -> str:
+		if abs(value.imag) < 1e-10:
+			return f"{value.real:.6g}"
+		sign = "+" if value.imag >= 0 else "-"
+		return f"{value.real:.6g}{sign}{abs(value.imag):.6g}j"
+
+	def _format_coeff_sequence(self, coeffs: np.ndarray) -> str:
+		return " ".join(self._format_coeff_token(complex(value)) for value in np.asarray(coeffs, dtype=complex))
+
+	def _sync_inputs_from_current_model(self) -> None:
+		if not hasattr(self, "model"):
+			return
+		self.num_text.set(self._format_coeff_sequence(self.model.numerator))
+		self.den_text.set(self._format_coeff_sequence(self.model.denominator))
+		self.equation_text.set(self._equation_from_roots())
+		self._sync_pz_table_from_roots()
+
+	def _sync_pz_table_from_roots(self) -> None:
+		if not hasattr(self, "pz_tree"):
+			return
+		selected_row = None
+		if self.selected_kind is not None and self.selected_index is not None:
+			if self.selected_kind == "pole":
+				selected_row = self.selected_index
+			else:
+				selected_row = len(self.poles) + self.selected_index
+		for item in self.pz_tree.get_children():
+			self.pz_tree.delete(item)
+		for root in self.poles:
+			self.pz_tree.insert("", "end", values=("pole", f"{root.real:.6f}", f"{root.imag:.6f}"))
+		for root in self.zeros:
+			self.pz_tree.insert("", "end", values=("zero", f"{root.real:.6f}", f"{root.imag:.6f}"))
+		children = self.pz_tree.get_children()
+		if not children:
+			return
+		if selected_row is None or selected_row < 0 or selected_row >= len(children):
+			selected_row = 0
+		item = children[selected_row]
+		self.pz_tree.selection_set(item)
+		self.pz_tree.focus(item)
+		self._on_pz_tree_select(None)
 
 	def _reset_defaults(self) -> None:
 		self.analysis_mode_text.set("Control systems")
@@ -460,6 +634,19 @@ class PoleZeroDesktopApp:
 		self.den_text.set("1 1.4 1")
 		self.equation_text.set("H(s) = (s + 1) / (s^2 + 1.4*s + 1)")
 		self.variable_text.set("s")
+		self.control_damping_text.set("0.7")
+		self.control_wn_text.set("1.0")
+		self.control_gain_text.set("1.0")
+		self.signal_family_text.set("Butterworth")
+		self.signal_response_type_text.set("lowpass")
+		self.signal_order_text.set("")
+		self.signal_passband_text.set("1.0")
+		self.signal_stopband_text.set("1.5")
+		self.signal_passband_ripple_text.set("1.0")
+		self.signal_stopband_attenuation_text.set("40.0")
+		self.signal_gain_text.set("1.0")
+		self.signal_bessel_norm_text.set("phase")
+		self.signal_specs = None
 		self.show_step_response.set(True)
 		self.show_impulse_response.set(True)
 		self.show_ramp_response.set(True)
@@ -469,9 +656,14 @@ class PoleZeroDesktopApp:
 		self.snap_to_grid.set(True)
 		self.grid_step.set(0.01)
 		self.sim_time.set(10.0)
+		self.auto_frequency_scale.set(True)
+		self.freq_min.set(0.01)
+		self.freq_max.set(1000.0)
 		self.selected_kind = None
 		self.selected_index = None
-		self._sync_control_mode_sections()
+		self.signal_specs = None
+		self._on_frequency_scale_changed()
+		self._sync_analysis_mode_sections()
 		self._set_input_mode_visibility()
 		self._load_system()
 
@@ -487,18 +679,24 @@ class PoleZeroDesktopApp:
 		self._refresh_from_state()
 
 	def _on_analysis_mode_changed(self) -> None:
-		self._sync_control_mode_sections()
+		self._sync_analysis_mode_sections()
 		self._refresh_from_state()
 
-	def _sync_control_mode_sections(self) -> None:
+	def _sync_analysis_mode_sections(self) -> None:
 		if self._analysis_mode() == "Control systems":
 			if not self.control_design_section.container.winfo_ismapped():
 				self.control_design_section.container.grid()
 			if not self.control_info_section.container.winfo_ismapped():
 				self.control_info_section.container.grid()
+			self.signal_design_section.container.grid_remove()
+			self.signal_info_section.container.grid_remove()
 		else:
 			self.control_design_section.container.grid_remove()
 			self.control_info_section.container.grid_remove()
+			if not self.signal_design_section.container.winfo_ismapped():
+				self.signal_design_section.container.grid()
+			if not self.signal_info_section.container.winfo_ismapped():
+				self.signal_info_section.container.grid()
 
 	def _on_input_mode_changed(self) -> None:
 		self._set_input_mode_visibility()
@@ -542,15 +740,7 @@ class PoleZeroDesktopApp:
 		self.pz_tree.column("Imag", width=value_width)
 
 	def _populate_pz_table(self) -> None:
-		if not hasattr(self, "pz_tree"):
-			return
-		for item in self.pz_tree.get_children():
-			self.pz_tree.delete(item)
-		for root in self.poles:
-			self.pz_tree.insert("", "end", values=("pole", f"{root.real:.6f}", f"{root.imag:.6f}"))
-		for root in self.zeros:
-			self.pz_tree.insert("", "end", values=("zero", f"{root.real:.6f}", f"{root.imag:.6f}"))
-		self._select_first_pz_row()
+		self._sync_pz_table_from_roots()
 
 	def _select_first_pz_row(self) -> None:
 		children = self.pz_tree.get_children()
@@ -677,6 +867,39 @@ class PoleZeroDesktopApp:
 	def _analysis_mode(self) -> str:
 		return self.analysis_mode_text.get()
 
+	def _on_frequency_scale_changed(self) -> None:
+		state = "disabled" if self.auto_frequency_scale.get() else "normal"
+		self.freq_min_spin.configure(state=state)
+		self.freq_max_spin.configure(state=state)
+		self._refresh_from_state()
+
+	def _auto_frequency_bounds(self) -> tuple[float, float]:
+		characteristic: list[float] = []
+		if self.signal_specs is not None:
+			for edge in (self.signal_specs.passband_edges, self.signal_specs.stopband_edges):
+				if isinstance(edge, tuple):
+					characteristic.extend([abs(float(value)) for value in edge])
+				else:
+					characteristic.append(abs(float(edge)))
+		for root in np.concatenate([self.poles, self.zeros]) if (len(self.poles) or len(self.zeros)) else np.array([], dtype=complex):
+			magnitude = abs(root)
+			if magnitude > 1e-10:
+				characteristic.append(float(magnitude))
+		if not characteristic:
+			return 0.01, 1000.0
+		minimum = max(min(characteristic) / 20.0, 1e-4)
+		maximum = max(max(characteristic) * 20.0, minimum * 10.0)
+		return minimum, maximum
+
+	def _frequency_bounds(self) -> tuple[float, float]:
+		if self.auto_frequency_scale.get():
+			return self._auto_frequency_bounds()
+		minimum = float(self.freq_min.get())
+		maximum = float(self.freq_max.get())
+		if minimum <= 0 or maximum <= minimum:
+			raise ValueError("Manual frequency bounds must satisfy 0 < min < max.")
+		return minimum, maximum
+
 	def _pointer_within_widget(self, widget: tk.Widget, x: int, y: int) -> bool:
 		left = widget.winfo_rootx()
 		top = widget.winfo_rooty()
@@ -740,6 +963,7 @@ class PoleZeroDesktopApp:
 			messagebox.showerror("Invalid system", str(exc))
 			return
 
+		self.signal_specs = None
 		self.poles = np.array(self.model.poles, dtype=complex)
 		self.zeros = np.array(self.model.zeros, dtype=complex)
 		self.gain = float(np.real_if_close(self.model.numerator[0]).real)
@@ -868,6 +1092,7 @@ class PoleZeroDesktopApp:
 		if not allow_complex:
 			self.poles = self._snap_complex_roots_to_real_axis(self.poles) if not self.mirror_conjugates.get() else self._enforce_conjugates(self.poles)
 			self.zeros = self._snap_complex_roots_to_real_axis(self.zeros) if not self.mirror_conjugates.get() else self._enforce_conjugates(self.zeros)
+		self.signal_specs = None
 
 		numerator = coefficients_from_roots(self.zeros, scale=self.gain, allow_complex=allow_complex)
 		denominator = coefficients_from_roots(self.poles, scale=1.0, allow_complex=allow_complex)
@@ -995,7 +1220,11 @@ class PoleZeroDesktopApp:
 		return t, np.real_if_close(y)
 
 	def _frequency_response_series(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-		omega = np.logspace(-2, 3, 900)
+		try:
+			omega_min, omega_max = self._frequency_bounds()
+		except ValueError:
+			omega_min, omega_max = self._auto_frequency_bounds()
+		omega = np.logspace(np.log10(omega_min), np.log10(omega_max), 900)
 		jw = 1j * omega
 		h = np.polyval(self.model.numerator, jw) / np.polyval(self.model.denominator, jw)
 		magnitude_db = 20.0 * np.log10(np.maximum(np.abs(h), 1e-15))
@@ -1010,8 +1239,10 @@ class PoleZeroDesktopApp:
 
 	def _refresh_from_state(self) -> None:
 		self._update_selection_entries()
+		self._sync_inputs_from_current_model()
 		self._update_equation_output()
 		self._update_control_information()
+		self._update_signal_information()
 		self._update_sidebar_width()
 		self._draw_plots()
 
@@ -1043,6 +1274,106 @@ class PoleZeroDesktopApp:
 				f"τ = {self._format_time_value(pole_metric.time_constant)}"
 			)
 		return "\n".join(lines)
+
+	def _format_frequency_value(self, value: float | None) -> str:
+		if value is None:
+			return "n/a"
+		return f"{value:.4f} rad/s"
+
+	def _format_frequency_window(self, value: float | tuple[float, float] | None) -> str:
+		if value is None:
+			return "n/a"
+		if isinstance(value, tuple):
+			return f"[{value[0]:.4f}, {value[1]:.4f}] rad/s"
+		return f"{value:.4f} rad/s"
+
+	def _format_gain_db(self, value: float | None) -> str:
+		if value is None:
+			return "n/a"
+		return f"{value:.4f} dB"
+
+	def _parse_frequency_edges(self, raw: str, response_type: str) -> float | tuple[float, float]:
+		tokens = raw.replace(",", " ").split()
+		if response_type in {"bandpass", "bandstop"}:
+			if len(tokens) != 2:
+				raise ValueError("Band filters require exactly two edge frequencies.")
+			low = float(tokens[0])
+			high = float(tokens[1])
+			if low <= 0 or high <= 0 or low >= high:
+				raise ValueError("Band edge frequencies must be positive and increasing.")
+			return (low, high)
+		if len(tokens) != 1:
+			raise ValueError("Low/high-pass filters require a single edge frequency.")
+		value = float(tokens[0])
+		if value <= 0:
+			raise ValueError("Edge frequencies must be positive.")
+		return value
+
+	def _parse_optional_int(self, raw: str) -> int | None:
+		raw = raw.strip()
+		if not raw:
+			return None
+		order = int(raw)
+		if order <= 0:
+			raise ValueError("Filter order must be positive.")
+		return order
+
+	def _update_signal_information(self) -> None:
+		if self._analysis_mode() != "Signal processing":
+			self.signal_info_widget.configure(state="normal")
+			self.signal_info_widget.delete("1.0", tk.END)
+			self.signal_info_widget.insert(tk.END, "Filter metrics are hidden in Control systems mode.")
+			self.signal_info_widget.configure(state="disabled")
+			return
+
+		lines: list[str]
+		if self.signal_specs is not None:
+			try:
+				metrics = filter_design_metrics(self.model, self.signal_specs)
+			except Exception as exc:
+				self.signal_info_widget.configure(state="normal")
+				self.signal_info_widget.delete("1.0", tk.END)
+				self.signal_info_widget.insert(tk.END, f"Unable to compute filter metrics: {exc}")
+				self.signal_info_widget.configure(state="disabled")
+				return
+
+			lines = [
+				"Filter design information",
+				f"Filter family: {metrics.family}",
+				f"Response type: {metrics.response_type}",
+				f"Order: {metrics.order}",
+				f"Passband edge(s): {self._format_frequency_window(metrics.passband_edges)}",
+				f"Stopband edge(s): {self._format_frequency_window(metrics.stopband_edges)}",
+				f"Transition band: {self._format_frequency_window(metrics.transition_band)}",
+				f"3 dB cutoff: {self._format_frequency_window(metrics.cutoff_frequency_3db)}",
+				f"Peak gain: {self._format_gain_db(metrics.peak_gain_db)}",
+				f"Passband ripple: {self._format_gain_db(metrics.passband_ripple_db)}",
+				f"Stopband attenuation: {self._format_gain_db(metrics.stopband_attenuation_db)}",
+				f"Passband gain: {self._format_gain_db(metrics.passband_gain_db)}",
+				f"Stopband gain: {self._format_gain_db(metrics.stopband_gain_db)}",
+			]
+		else:
+			response = self._frequency_response_series()
+			peak_gain = float(np.max(response[1])) if response[1].size else float("nan")
+			cutoff = None
+			if response[1].size:
+				threshold = peak_gain - 3.0
+				index = np.where(response[1] <= threshold)[0]
+				if index.size:
+					cutoff = float(response[0][index[0]])
+			lines = [
+				"Filter response information",
+				f"Peak gain: {self._format_gain_db(peak_gain)}",
+				f"Approximate 3 dB cutoff: {self._format_frequency_value(cutoff)}",
+				f"Poles: {len(self.poles)}",
+				f"Zeros: {len(self.zeros)}",
+				"Use Filter design to generate a response from explicit specifications.",
+			]
+
+		self.signal_info_widget.configure(state="normal")
+		self.signal_info_widget.delete("1.0", tk.END)
+		self.signal_info_widget.insert(tk.END, "\n".join(lines))
+		self.signal_info_widget.configure(state="disabled")
 
 	def _update_control_information(self) -> None:
 		if self._analysis_mode() != "Control systems":
@@ -1085,6 +1416,50 @@ class PoleZeroDesktopApp:
 		self.control_info_widget.insert(tk.END, "\n".join(lines))
 		self.control_info_widget.configure(state="disabled")
 
+	def _build_filter_from_specs(self) -> None:
+		try:
+			order = self._parse_optional_int(self.signal_order_text.get())
+			passband_edges = self._parse_frequency_edges(self.signal_passband_text.get(), self.signal_response_type_text.get())
+			stopband_edges = self._parse_frequency_edges(self.signal_stopband_text.get(), self.signal_response_type_text.get())
+			passband_ripple_db = float(self.signal_passband_ripple_text.get())
+			stopband_attenuation_db = float(self.signal_stopband_attenuation_text.get())
+			gain = float(self.signal_gain_text.get())
+		except ValueError as exc:
+			messagebox.showerror("Invalid filter specs", f"Filter specification fields must be numeric: {exc}")
+			return
+
+		specs = FilterDesignSpecs(
+			family=self.signal_family_text.get(),
+			response_type=self.signal_response_type_text.get(),
+			passband_edges=passband_edges,
+			stopband_edges=stopband_edges,
+			passband_ripple_db=passband_ripple_db,
+			stopband_attenuation_db=stopband_attenuation_db,
+			order=order,
+			bessel_norm=self.signal_bessel_norm_text.get(),
+			gain=gain,
+		)
+
+		try:
+			model = design_filter_from_specs(specs)
+		except Exception as exc:
+			messagebox.showerror("Invalid filter specs", str(exc))
+			return
+
+		self.signal_specs = specs
+		self.analysis_mode_text.set("Signal processing")
+		self.poles = np.array(model.poles, dtype=complex)
+		self.zeros = np.array(model.zeros, dtype=complex)
+		self.gain = float(np.real_if_close(model.numerator[0]).real)
+		self.model = model
+		self.status_text.set(stability_summary(self.model))
+		self._clear_selection()
+		self.num_text.set(" ".join(f"{value:.6g}" for value in np.atleast_1d(model.numerator)))
+		self.den_text.set(" ".join(f"{value:.6g}" for value in np.atleast_1d(model.denominator)))
+		self._sync_analysis_mode_sections()
+		self._set_input_mode_visibility()
+		self._refresh_from_state()
+
 	def _build_control_system_from_specs(self) -> None:
 		try:
 			zeta = float(self.control_damping_text.get())
@@ -1101,10 +1476,11 @@ class PoleZeroDesktopApp:
 			return
 
 		self.analysis_mode_text.set("Control systems")
+		self.signal_specs = None
 		self.input_mode.set("Coefficients")
 		self.num_text.set(" ".join(f"{value:.6g}" for value in np.atleast_1d(model.numerator)))
 		self.den_text.set(" ".join(f"{value:.6g}" for value in np.atleast_1d(model.denominator)))
-		self._sync_control_mode_sections()
+		self._sync_analysis_mode_sections()
 		self._set_input_mode_visibility()
 		self._load_system()
 

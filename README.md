@@ -27,6 +27,12 @@ A native desktop tool for control systems and filter design analysis, featuring 
   - Control-system performance metrics including rise time, settling time, overshoot, damping ratio, and natural frequency
   - Canonical second-order prototype generation from damping ratio and natural frequency
 
+- **Signal-Processing Filter Design**
+  - Design analog IIR filters from passband/stopband specs
+  - Supported families: Butterworth, Chebyshev I, Chebyshev II, Elliptic, and Bessel
+  - Manual or automatic order selection where supported
+  - Filter information including cutoff frequency, transition band, ripple, attenuation, and response gain
+
 ## Installation
 
 ### Prerequisites
@@ -106,7 +112,8 @@ This version opens a native desktop window and lets you click and drag poles/zer
 3. Drag poles/zeros on the pole-zero map or edit selected points numerically.
 4. Switch between Control systems and Signal processing analysis modes.
 5. Use the Control design section to generate a second-order prototype from damping ratio and natural frequency.
-6. Use visibility toggles and simulation horizon controls to focus analysis.
+6. Use the Filter design section in Signal processing mode to create analog IIR filters from passband and stopband specifications.
+7. Use visibility toggles and simulation horizon controls to focus analysis.
 
 ## Project Structure
 

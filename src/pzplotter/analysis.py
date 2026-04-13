@@ -66,6 +66,39 @@ class ControlSystemMetrics:
 
 
 @dataclass
+class FilterDesignSpecs:
+    """User-facing filter design specification for signal-processing mode."""
+
+    family: Literal["Butterworth", "Chebyshev I", "Chebyshev II", "Elliptic", "Bessel"]
+    response_type: Literal["lowpass", "highpass", "bandpass", "bandstop"]
+    passband_edges: float | tuple[float, float]
+    stopband_edges: float | tuple[float, float]
+    passband_ripple_db: float
+    stopband_attenuation_db: float
+    order: int | None = None
+    bessel_norm: Literal["phase", "delay"] = "phase"
+    gain: float = 1.0
+
+
+@dataclass
+class FilterDesignMetrics:
+    """Frequency-domain metrics for signal-processing filter design."""
+
+    family: str
+    response_type: str
+    order: int
+    passband_edges: float | tuple[float, float]
+    stopband_edges: float | tuple[float, float]
+    transition_band: float | tuple[float, float] | None
+    cutoff_frequency_3db: float | tuple[float, float] | None
+    peak_gain_db: float
+    passband_ripple_db: float | None
+    stopband_attenuation_db: float | None
+    passband_gain_db: float | None
+    stopband_gain_db: float | None
+
+
+@dataclass
 class TimeResponse:
     """Time-domain response output for plotting."""
 
@@ -238,6 +271,229 @@ def frequency_response(model: LTIModel, n_points: int = 800) -> FrequencyRespons
     omega = np.logspace(-2, 3, n_points)
     omega, magnitude_db, phase_deg = signal.bode(system, w=omega)
     return FrequencyResponse(omega=omega, magnitude_db=magnitude_db, phase_deg=phase_deg)
+
+
+def _normalize_edges(edges: float | tuple[float, float], response_type: str) -> float | tuple[float, float]:
+    if response_type in {"bandpass", "bandstop"}:
+        if isinstance(edges, tuple):
+            if len(edges) != 2:
+                raise ValueError("Band filters require exactly two edge frequencies.")
+            low, high = float(edges[0]), float(edges[1])
+        else:
+            raise ValueError("Band filters require two edge frequencies.")
+        if low <= 0 or high <= 0 or low >= high:
+            raise ValueError("Band edge frequencies must be positive and strictly increasing.")
+        return (low, high)
+
+    if isinstance(edges, tuple):
+        if len(edges) != 1:
+            raise ValueError("Low/high-pass filters require a single edge frequency.")
+        value = float(edges[0])
+    else:
+        value = float(edges)
+    if value <= 0:
+        raise ValueError("Edge frequencies must be positive.")
+    return value
+
+
+def _design_iir_filter(
+    order: int,
+    wn: float | tuple[float, float],
+    family: str,
+    response_type: str,
+    passband_ripple_db: float,
+    stopband_attenuation_db: float,
+    bessel_norm: str = "phase",
+) -> tuple[np.ndarray, np.ndarray]:
+    family_key = family.lower()
+    if family_key == "butterworth":
+        num, den = signal.iirfilter(order, wn, btype=response_type, analog=True, ftype="butter")
+    elif family_key == "chebyshev i":
+        num, den = signal.iirfilter(order, wn, rp=passband_ripple_db, btype=response_type, analog=True, ftype="cheby1")
+    elif family_key == "chebyshev ii":
+        num, den = signal.iirfilter(order, wn, rs=stopband_attenuation_db, btype=response_type, analog=True, ftype="cheby2")
+    elif family_key == "elliptic":
+        num, den = signal.iirfilter(
+            order,
+            wn,
+            rp=passband_ripple_db,
+            rs=stopband_attenuation_db,
+            btype=response_type,
+            analog=True,
+            ftype="ellip",
+        )
+    elif family_key == "bessel":
+        num, den = signal.bessel(order, wn, btype=response_type, analog=True, norm=bessel_norm)
+    else:
+        raise ValueError(f"Unsupported filter family: {family}")
+
+    return np.asarray(num, dtype=float), np.asarray(den, dtype=float)
+
+
+def design_filter_from_specs(specs: FilterDesignSpecs) -> LTIModel:
+    """Design an analog IIR filter from passband/stopband specifications."""
+
+    response_type = specs.response_type.lower()
+    family = specs.family
+    passband_edges = _normalize_edges(specs.passband_edges, response_type)
+    stopband_edges = _normalize_edges(specs.stopband_edges, response_type)
+
+    if specs.order is not None and specs.order <= 0:
+        raise ValueError("Filter order must be positive.")
+
+    if family.lower() == "bessel" and specs.order is None:
+        raise ValueError("Bessel filters require an explicit order.")
+
+    if specs.order is None:
+        if family.lower() == "butterworth":
+            order, wn = signal.buttord(passband_edges, stopband_edges, specs.passband_ripple_db, specs.stopband_attenuation_db, analog=True)
+        elif family.lower() == "chebyshev i":
+            order, wn = signal.cheb1ord(passband_edges, stopband_edges, specs.passband_ripple_db, specs.stopband_attenuation_db, analog=True)
+        elif family.lower() == "chebyshev ii":
+            order, wn = signal.cheb2ord(passband_edges, stopband_edges, specs.passband_ripple_db, specs.stopband_attenuation_db, analog=True)
+        elif family.lower() == "elliptic":
+            order, wn = signal.ellipord(passband_edges, stopband_edges, specs.passband_ripple_db, specs.stopband_attenuation_db, analog=True)
+        else:
+            raise ValueError("Automatic order selection is supported for Butterworth, Chebyshev I/II, and Elliptic filters.")
+    else:
+        order = specs.order
+        wn = passband_edges
+
+    numerator, denominator = _design_iir_filter(
+        order,
+        wn,
+        family=family,
+        response_type=response_type,
+        passband_ripple_db=specs.passband_ripple_db,
+        stopband_attenuation_db=specs.stopband_attenuation_db,
+        bessel_norm=specs.bessel_norm,
+    )
+    if family.lower() == "bessel":
+        numerator = numerator * float(specs.gain)
+    else:
+        numerator = numerator * float(specs.gain)
+    return build_lti_model(numerator, denominator)
+
+
+def _sample_filter_response(model: LTIModel, specs: FilterDesignSpecs | None = None, n_points: int = 2400) -> FrequencyResponse:
+    if specs is None:
+        return frequency_response(model, n_points=n_points)
+
+    raw_edges = [specs.passband_edges, specs.stopband_edges]
+    frequencies: list[float] = []
+    for edge in raw_edges:
+        if isinstance(edge, tuple):
+            frequencies.extend([float(value) for value in edge])
+        else:
+            frequencies.append(float(edge))
+
+    minimum = max(min(frequencies) / 20.0, 1e-3)
+    maximum = max(frequencies) * 20.0
+    omega = np.logspace(np.log10(minimum), np.log10(maximum), n_points)
+    system = signal.TransferFunction(model.numerator, model.denominator)
+    omega, magnitude_db, phase_deg = signal.bode(system, w=omega)
+    return FrequencyResponse(omega=omega, magnitude_db=magnitude_db, phase_deg=phase_deg)
+
+
+def _frequency_windows(specs: FilterDesignSpecs) -> tuple[tuple[float, float], tuple[float, float]]:
+    response_type = specs.response_type.lower()
+    passband = _normalize_edges(specs.passband_edges, response_type)
+    stopband = _normalize_edges(specs.stopband_edges, response_type)
+    if isinstance(passband, tuple):
+        passband_window = passband
+    else:
+        if response_type == "lowpass":
+            passband_window = (1e-6, passband)
+        else:
+            passband_window = (passband, passband * 100.0)
+    if isinstance(stopband, tuple):
+        stopband_window = stopband
+    else:
+        if response_type == "lowpass":
+            stopband_window = (stopband, stopband * 100.0)
+        else:
+            stopband_window = (1e-6, stopband)
+    return passband_window, stopband_window
+
+
+def _crossing_frequency(omega: np.ndarray, magnitude_db: np.ndarray, threshold_db: float, rising: bool) -> float | None:
+    if rising:
+        indices = np.where(magnitude_db >= threshold_db)[0]
+    else:
+        indices = np.where(magnitude_db <= threshold_db)[0]
+    if indices.size == 0:
+        return None
+    return float(omega[indices[0]])
+
+
+def filter_design_metrics(model: LTIModel, specs: FilterDesignSpecs, n_points: int = 2400) -> FilterDesignMetrics:
+    """Compute response metrics for a designed analog filter."""
+
+    response = _sample_filter_response(model, specs=specs, n_points=n_points)
+    omega = response.omega
+    magnitude_db = response.magnitude_db
+
+    passband_window, stopband_window = _frequency_windows(specs)
+    response_type = specs.response_type.lower()
+
+    if response_type in {"lowpass", "highpass"}:
+        p_edge = passband_window[1] if response_type == "lowpass" else passband_window[0]
+        s_edge = stopband_window[0] if response_type == "lowpass" else stopband_window[1]
+        if response_type == "lowpass":
+            passband_mask = omega <= p_edge
+            stopband_mask = omega >= s_edge
+        else:
+            passband_mask = omega >= p_edge
+            stopband_mask = omega <= s_edge
+    elif response_type == "bandpass":
+        passband_mask = (omega >= passband_window[0]) & (omega <= passband_window[1])
+        stopband_mask = (omega <= stopband_window[0]) | (omega >= stopband_window[1])
+    else:
+        passband_mask = (omega <= passband_window[0]) | (omega >= passband_window[1])
+        stopband_mask = (omega >= stopband_window[0]) & (omega <= stopband_window[1])
+
+    passband_values = magnitude_db[passband_mask]
+    stopband_values = magnitude_db[stopband_mask]
+
+    peak_gain_db = float(np.max(magnitude_db)) if magnitude_db.size else float("nan")
+    passband_ripple_db = float(np.max(passband_values) - np.min(passband_values)) if passband_values.size else None
+    stopband_attenuation_db = float(-np.max(stopband_values)) if stopband_values.size else None
+    passband_gain_db = float(np.max(passband_values)) if passband_values.size else None
+    stopband_gain_db = float(np.max(stopband_values)) if stopband_values.size else None
+
+    cutoff_frequency_3db: float | tuple[float, float] | None = None
+    threshold_db = peak_gain_db - 3.0
+    if response_type == "lowpass":
+        cutoff_frequency_3db = _crossing_frequency(omega, magnitude_db, threshold_db, rising=False)
+    elif response_type == "highpass":
+        cutoff_frequency_3db = _crossing_frequency(omega, magnitude_db, threshold_db, rising=True)
+    elif response_type in {"bandpass", "bandstop"}:
+        crossings = np.where(np.diff((magnitude_db >= threshold_db).astype(int)) != 0)[0]
+        if crossings.size >= 2:
+            cutoff_frequency_3db = (float(omega[crossings[0]]), float(omega[crossings[-1] + 1]))
+
+    if response_type in {"lowpass", "highpass"}:
+        transition_band: float | tuple[float, float] | None = abs(float(specs.stopband_edges) - float(specs.passband_edges))
+    else:
+        transition_band = (
+            float(abs(specs.passband_edges[0] - specs.stopband_edges[0])),
+            float(abs(specs.stopband_edges[1] - specs.passband_edges[1])),
+        )
+
+    return FilterDesignMetrics(
+        family=specs.family,
+        response_type=specs.response_type,
+        order=int(len(model.poles)) if model.poles.size else 0,
+        passband_edges=specs.passband_edges,
+        stopband_edges=specs.stopband_edges,
+        transition_band=transition_band,
+        cutoff_frequency_3db=cutoff_frequency_3db,
+        peak_gain_db=peak_gain_db,
+        passband_ripple_db=passband_ripple_db,
+        stopband_attenuation_db=stopband_attenuation_db,
+        passband_gain_db=passband_gain_db,
+        stopband_gain_db=stopband_gain_db,
+    )
 
 
 def _input_signal(t: np.ndarray, signal_type: TimeSignalType) -> np.ndarray:
